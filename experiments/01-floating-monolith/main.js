@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Experiment 01 — Floating Monolith
 // A slow-turning obelisk under moody lighting.
-// Proves the stack works end to end.
+// Now with a KITT-style scanner ribbon (for Al's inner 8-year-old).
 // ─────────────────────────────────────────────────────────────
 
 import * as THREE from 'three';
@@ -53,9 +53,54 @@ monolith.castShadow = true;
 monolith.receiveShadow = true;
 scene.add(monolith);
 
-// Subtle rim light edges (glowing ribbon around the top)
-const ribbonGeo = new THREE.BoxGeometry(0.82, 0.03, 0.42);
-const ribbonMat = new THREE.MeshBasicMaterial({ color: 0xc46d47 });
+// ── KITT-style scanner ribbon ─────────────────────────
+// The ribbon is a shallow box on the front face of the monolith.
+// We use a shader material so we can draw a moving bright spot
+// along its length with soft falloff — like KITT's voice box.
+const ribbonWidth = 0.82;
+const ribbonHeight = 0.05;
+const ribbonDepth = 0.42;
+
+const ribbonGeo = new THREE.BoxGeometry(ribbonWidth, ribbonHeight, ribbonDepth);
+
+const ribbonMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+    uColor: { value: new THREE.Color(0xff4410) }, // hotter orange for scanner
+    uWidth: { value: ribbonWidth },
+  },
+  vertexShader: `
+    varying vec3 vPosition;
+    void main() {
+      vPosition = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime;
+    uniform vec3 uColor;
+    uniform float uWidth;
+    varying vec3 vPosition;
+
+    void main() {
+      // KITT scans in a characteristic pattern — pingpong across full width.
+      // We use sin() for smooth easing at the edges.
+      float scanPos = sin(uTime * 1.8) * (uWidth * 0.5);
+
+      // Distance from this fragment's x-position to the scanner's current position.
+      float dist = abs(vPosition.x - scanPos);
+
+      // Bright core with soft exponential falloff.
+      float intensity = exp(-dist * 18.0) * 1.6;
+
+      // Always a dim baseline glow so the whole ribbon reads as "on".
+      intensity += 0.15;
+
+      gl_FragColor = vec4(uColor * intensity, 1.0);
+    }
+  `,
+});
+
 const ribbon = new THREE.Mesh(ribbonGeo, ribbonMat);
 ribbon.position.y = 3.0;
 scene.add(ribbon);
@@ -73,11 +118,9 @@ ground.receiveShadow = true;
 scene.add(ground);
 
 // ── Lighting ──────────────────────────────────────────
-// Low fill to keep shadows moody but readable
 const ambient = new THREE.AmbientLight(0xffffff, 0.08);
 scene.add(ambient);
 
-// Key light — warm terracotta tone, simulates a setting sun
 const keyLight = new THREE.DirectionalLight(0xc46d47, 1.6);
 keyLight.position.set(4, 6, 3);
 keyLight.castShadow = true;
@@ -91,7 +134,6 @@ keyLight.shadow.camera.bottom = -6;
 keyLight.shadow.bias = -0.0005;
 scene.add(keyLight);
 
-// Rim light — cool blue from behind, separates monolith from background
 const rimLight = new THREE.DirectionalLight(0x4a6fa5, 0.6);
 rimLight.position.set(-3, 2, -4);
 scene.add(rimLight);
@@ -116,6 +158,9 @@ function animate() {
 
   ribbon.rotation.y = monolith.rotation.y;
   ribbon.position.y = 3.0 + Math.sin(elapsed * 0.6) * 0.08;
+
+  // Feed the current time to the scanner shader
+  ribbonMat.uniforms.uTime.value = elapsed;
 
   controls.update();
   renderer.render(scene, camera);
