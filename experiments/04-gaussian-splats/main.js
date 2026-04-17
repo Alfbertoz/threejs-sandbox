@@ -57,6 +57,18 @@ const SPLATS = [
     cameraRadius: 4.0,
     cameraHeight: 1.0,
   },
+  {
+    // Heavy one — ~163MB compressed ply of a full church interior.
+    // Button label warns the user so the long load isn't a surprise;
+    // the existing spinner stays visible for the whole download.
+    name: 'Church (163MB)',
+    url: 'https://d28zzqy0iyovbz.cloudfront.net/c67edb74/v1/scene.compressed.ply',
+    position: new THREE.Vector3(0, 0, 0),
+    quaternion: new THREE.Quaternion(1, 0, 0, 0),
+    scale: 1.0,
+    cameraRadius: 7,
+    cameraHeight: 1.5,
+  },
 ];
 
 // ── Scene ─────────────────────────────────────────────
