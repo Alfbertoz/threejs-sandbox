@@ -50,7 +50,7 @@ const SPLATS = [
     name: 'Luigi',
     url: 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/luigi/luigi.ply',
     position: new THREE.Vector3(0, 0.4, 0),
-    quaternion: new THREE.Quaternion(0, 0, 1, 0),
+    quaternion: new THREE.Quaternion(0, 1, 0, 1),
     // Figurine-scale capture — much smaller than the room-scale scenes
     // above, so scale/cameraRadius are tuned tighter.
     scale: 0.5,
