@@ -1,20 +1,57 @@
 // ─────────────────────────────────────────────────────────────
 // Experiment 04 — Gaussian Splats
-// Loads a 3D Gaussian splat via the Spark library and floats it
-// in dark cinematic space. Two camera modes: free-orbit, and a
-// hands-off cinematic circle.
+// Loads 3D Gaussian splats via the Spark library and floats them
+// in dark cinematic space. Switcher UI cycles between scenes.
+// Two camera modes: free-orbit, and a hands-off cinematic circle.
 // ─────────────────────────────────────────────────────────────
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { SplatMesh } from '@sparkjsdev/spark';
 
-const SPLAT_URL = 'https://sparkjs.dev/assets/splats/butterfly.spz';
+// ── Splat catalog ─────────────────────────────────────
+// Each capture arrives in its own coordinate system and scale,
+// so framing values are hand-tuned rather than auto-fit from
+// bounding boxes. Tweak freely — every other system reads from
+// the currently-selected entry.
+//
+// .spz/.splat files commonly export upside-down relative to THREE's
+// +Y-up convention; `new Quaternion(1,0,0,0)` is a 180° flip around
+// X that puts them right-way-up. Fine-tune per splat if needed.
+const SPLATS = [
+  {
+    name: 'Butterfly',
+    url: 'https://sparkjs.dev/assets/splats/butterfly.spz',
+    position: new THREE.Vector3(0, 0.4, 0),
+    quaternion: new THREE.Quaternion(1, 0, 0, 0),
+    scale: 2.2,
+    cameraRadius: 6,
+    cameraHeight: 1.2,
+  },
+  {
+    name: 'Bonsai',
+    url: 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/bonsai/bonsai-7k-mini.splat',
+    position: new THREE.Vector3(0, 0.4, 0),
+    quaternion: new THREE.Quaternion(1, 0, 0, 0),
+    scale: 1.4,
+    cameraRadius: 5,
+    cameraHeight: 1.0,
+  },
+  {
+    name: 'Bicycle',
+    url: 'https://huggingface.co/datasets/dylanebert/3dgs/resolve/main/bicycle/bicycle-7k-mini.splat',
+    position: new THREE.Vector3(0, 0.4, 0),
+    quaternion: new THREE.Quaternion(1, 0, 0, 0),
+    scale: 1.0,
+    cameraRadius: 7,
+    cameraHeight: 1.3,
+  },
+];
 
 // ── Scene ─────────────────────────────────────────────
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0e0d0b);
-// Fog tuned so the splat reads clearly but the empty backdrop
+// Fog tuned so each splat reads clearly but the empty backdrop
 // dissolves into the same charcoal as the page.
 scene.fog = new THREE.Fog(0x0e0d0b, 8, 22);
 
@@ -25,9 +62,6 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   100
 );
-const CAM_RADIUS = 6;     // fixed radius used by cinematic mode
-const CAM_HEIGHT = 1.2;   // base height for cinematic orbit
-camera.position.set(0, CAM_HEIGHT, CAM_RADIUS);
 
 // ── Renderer ──────────────────────────────────────────
 // Spark recommends antialias:false — WebGL MSAA does nothing useful
@@ -40,80 +74,115 @@ renderer.toneMappingExposure = 1.0;
 document.body.appendChild(renderer.domElement);
 
 // ── Lighting ──────────────────────────────────────────
-// Splats carry their own baked colour — only a neutral ambient so
-// the scene helpers (if any were added later) don't read pitch-black.
+// Splats carry their own baked colour — neutral ambient only.
 scene.add(new THREE.AmbientLight(0xffffff, 0.25));
 
 // ── Controls ──────────────────────────────────────────
+// Wider distance range so the three splats' different scales can
+// all be navigated comfortably.
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
-controls.minDistance = 3;
-controls.maxDistance = 14;
-controls.target.set(0, 0.4, 0);
+controls.minDistance = 1;
+controls.maxDistance = 30;
 
-// ── Splat ─────────────────────────────────────────────
-const splat = new SplatMesh({ url: SPLAT_URL });
-// .spz files commonly export upside-down relative to THREE's
-// +Y-up convention. Spark's own README uses this same quaternion
-// to flip the butterfly right-side up.
-splat.quaternion.set(1, 0, 0, 0);
-splat.position.set(0, 0.4, 0);
-scene.add(splat);
-
-// ── Loading indicator ─────────────────────────────────
-// SplatMesh exposes `initialized: Promise<SplatMesh>`. No progress
-// bytes are surfaced by the API, so a spinner is the honest UI.
+// ── DOM refs & state ──────────────────────────────────
 const loaderEl = document.getElementById('loader');
-splat.initialized
-  .then(() => {
-    // Fit the splat to a pleasant on-screen size. Bounding box is
-    // only valid after initialization.
-    frameSplat(splat);
-    loaderEl.classList.add('gone');
-    setTimeout(() => loaderEl.remove(), 500);
-  })
-  .catch((err) => {
-    console.error('Splat load failed:', err);
-    loaderEl.querySelector('div:last-child').textContent = 'Failed to load';
-  });
+const loaderLabel = loaderEl.querySelector('div:last-child');
+const hintEl = document.getElementById('hint');
+const toggleEl = document.getElementById('mode-toggle');
+const pickerEl = document.getElementById('splat-picker');
 
-function frameSplat(mesh) {
-  const box = mesh.getBoundingBox();
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  box.getSize(size);
-  box.getCenter(center);
+let splat = null;
+let currentIndex = -1;
+let mode = 'orbit'; // 'orbit' | 'cinematic'
+let cinematicStartAngle = 0;
+let cinematicElapsedOffset = 0;
 
-  // Scale so the splat's largest dimension is ~2.2 world units
-  // (camera radius is 6, FOV 40° — fills the frame with breathing room).
-  const largest = Math.max(size.x, size.y, size.z) || 1;
-  const targetSize = 2.2;
-  const s = targetSize / largest;
-  mesh.scale.setScalar(s);
+// ─────────────────────────────────────────────────────────────
+// Splat loading
+// ─────────────────────────────────────────────────────────────
 
-  // Re-centre so the splat's visual middle sits at (0, 0.4, 0).
-  mesh.position.set(-center.x * s, 0.4 - center.y * s, -center.z * s);
+function showLoader() {
+  loaderEl.style.display = 'flex';
+  loaderLabel.textContent = 'Loading splat';
+  // Force a reflow so the transition replays on repeat loads.
+  void loaderEl.offsetWidth;
+  loaderEl.classList.remove('gone');
 }
+
+function hideLoader() {
+  loaderEl.classList.add('gone');
+  setTimeout(() => {
+    // Only fully hide if we haven't been asked to show it again.
+    if (loaderEl.classList.contains('gone')) loaderEl.style.display = 'none';
+  }, 500);
+}
+
+function setActiveSplat(index) {
+  if (index === currentIndex) return;
+
+  // Dispose of the previous splat's GPU resources — avoids leaks
+  // when the user hops between splats repeatedly.
+  if (splat) {
+    scene.remove(splat);
+    splat.dispose();
+    splat = null;
+  }
+
+  currentIndex = index;
+  const cfg = SPLATS[index];
+
+  splat = new SplatMesh({ url: cfg.url });
+  splat.position.copy(cfg.position);
+  splat.quaternion.copy(cfg.quaternion);
+  splat.scale.setScalar(cfg.scale);
+  scene.add(splat);
+
+  // The orbit target follows the splat's centre so controls feel natural.
+  controls.target.copy(cfg.position);
+
+  // Reset camera to the splat's preferred framing when in orbit mode.
+  // Cinematic mode reads cameraRadius/cameraHeight from the current
+  // config each frame and will glide the camera to the new values.
+  if (mode === 'orbit') {
+    camera.position.set(
+      cfg.position.x,
+      cfg.position.y + cfg.cameraHeight,
+      cfg.position.z + cfg.cameraRadius,
+    );
+    controls.update();
+  }
+
+  showLoader();
+  splat.initialized
+    .then(() => hideLoader())
+    .catch((err) => {
+      console.error('Splat load failed:', err);
+      loaderEl.classList.remove('gone');
+      loaderEl.style.display = 'flex';
+      loaderLabel.textContent = 'Failed to load';
+    });
+
+  // Refresh button highlights.
+  pickerEl.querySelectorAll('.chip').forEach((btn, i) => {
+    btn.classList.toggle('active', i === index);
+  });
+}
+
+// ── Build splat picker buttons from the catalog ───────
+SPLATS.forEach((cfg, i) => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chip';
+  btn.textContent = cfg.name;
+  btn.addEventListener('click', () => setActiveSplat(i));
+  pickerEl.appendChild(btn);
+});
 
 // ─────────────────────────────────────────────────────────────
 // Camera modes
 // ─────────────────────────────────────────────────────────────
-//
-// `orbit`      — OrbitControls drive the camera.
-// `cinematic`  — we ignore input and move the camera on a circle,
-//                with a sinusoidal rise-and-fall in height.
-//
-// Transitions between modes aren't snapped; when switching to
-// cinematic we pick up the current camera angle as the starting
-// phase, and when switching back to orbit we hand the current pose
-// to OrbitControls.
-let mode = 'orbit';
-let cinematicStartAngle = 0;
-let cinematicElapsedOffset = 0; // keeps the orbit smooth across toggles
-
-const hintEl = document.getElementById('hint');
-const toggleEl = document.getElementById('mode-toggle');
 
 function enterCinematic(elapsed) {
   // Take the camera's current angle around the target so we don't jump.
@@ -129,9 +198,8 @@ function enterCinematic(elapsed) {
 
 function enterOrbit() {
   controls.enabled = true;
-  // OrbitControls computes its spherical coords from the current
-  // camera.position vs. controls.target, so handing over is as
-  // simple as calling update() — no explicit state sync needed.
+  // OrbitControls re-derives spherical coords from camera vs. target
+  // on update() — no explicit state sync needed.
   controls.update();
   toggleEl.classList.remove('active');
   toggleEl.textContent = 'Cinematic';
@@ -149,25 +217,24 @@ toggleEl.addEventListener('click', () => {
 });
 
 // ── Smooth cinematic-mode camera ──────────────────────
-// The camera doesn't jump when we toggle: we lerp position each
-// frame toward the cinematic target so it glides into the circle.
 const cinematicTarget = new THREE.Vector3();
 const CINEMATIC_PERIOD = 26; // seconds per full revolution
 
 function updateCinematicTarget(elapsed) {
+  const cfg = SPLATS[currentIndex];
   const t = (elapsed - cinematicElapsedOffset) / CINEMATIC_PERIOD;
   const angle = cinematicStartAngle + t * Math.PI * 2;
   // Sinusoidal rise-and-fall — two cycles per revolution.
   const riseFall = Math.sin(t * Math.PI * 4) * 0.6;
 
   cinematicTarget.set(
-    controls.target.x + Math.cos(angle) * CAM_RADIUS,
-    controls.target.y + CAM_HEIGHT + riseFall,
-    controls.target.z + Math.sin(angle) * CAM_RADIUS,
+    controls.target.x + Math.cos(angle) * cfg.cameraRadius,
+    controls.target.y + cfg.cameraHeight + riseFall,
+    controls.target.z + Math.sin(angle) * cfg.cameraRadius,
   );
 }
 
-// Frame-rate-independent damped lerp (same idiom as experiment 03).
+// Frame-rate-independent damped lerp.
 function damp(current, target, rate, dt) {
   return current + (target - current) * (1 - Math.exp(-rate * dt));
 }
@@ -189,8 +256,8 @@ function animate() {
 
   if (mode === 'cinematic') {
     updateCinematicTarget(elapsed);
-    // Damp toward the target so the first frame after toggling
-    // glides from wherever the user left the camera.
+    // Damp toward the target so the first frame after toggling or
+    // switching splats glides from wherever the camera was.
     camera.position.x = damp(camera.position.x, cinematicTarget.x, 2.5, dt);
     camera.position.y = damp(camera.position.y, cinematicTarget.y, 2.5, dt);
     camera.position.z = damp(camera.position.z, cinematicTarget.z, 2.5, dt);
@@ -202,4 +269,7 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+// Kick off with the first splat (butterfly) — preserves the
+// pre-switcher default behaviour.
+setActiveSplat(0);
 animate();

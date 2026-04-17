@@ -71,6 +71,13 @@
     text-align: center;
   }
 
+  /* Splat picker — horizontal button row above the hint */
+  .splat-picker {
+    position: fixed; bottom: 60px; left: 50%;
+    transform: translateX(-50%); z-index: 10;
+    display: flex; gap: 8px;
+  }
+
   /* Loading indicator — small terracotta spinner + label */
   .loader {
     position: fixed; top: 50%; left: 50%;
@@ -106,6 +113,8 @@
     <button class="chip" id="mode-toggle" type="button">Cinematic</button>
     <a class="chip" href="../../">← Index</a>
   </div>
+
+  <div class="splat-picker" id="splat-picker"></div>
 
   <div class="hint" id="hint">Drag to orbit · Scroll to zoom</div>
 
