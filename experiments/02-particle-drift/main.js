@@ -44,7 +44,10 @@ controls.target.set(0, 0, 0);
 // azimuth over time so every mote rides its own lazy orbit.
 const PARTICLE_COUNT = 4000;
 
-const positions = new Float32Array(PARTICLE_COUNT * 3); // seed radius/azimuth/elevation
+// The built-in `position` attribute carries the polar seed
+// (radius, azimuth, elevation). Three.js needs a `position`
+// attribute to know the draw count; without one, zero points render.
+const seedPositions = new Float32Array(PARTICLE_COUNT * 3);
 const speeds = new Float32Array(PARTICLE_COUNT);
 const sizes = new Float32Array(PARTICLE_COUNT);
 const tints = new Float32Array(PARTICLE_COUNT); // 0 = cool rim, 1 = warm terracotta
@@ -62,22 +65,25 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   // when the cloud is wider than it is tall.
   const elevation = (Math.random() - 0.5) * Math.PI * 0.55;
 
-  positions[i * 3 + 0] = radius;
-  positions[i * 3 + 1] = azimuth;
-  positions[i * 3 + 2] = elevation;
+  seedPositions[i * 3 + 0] = radius;
+  seedPositions[i * 3 + 1] = azimuth;
+  seedPositions[i * 3 + 2] = elevation;
 
   // Inner particles orbit faster, outer ones crawl — feels gravitational.
   speeds[i] = (0.05 + Math.random() * 0.12) * (1.0 / (0.4 + radius * 0.12));
 
-  sizes[i] = 6 + Math.random() * 18;
+  sizes[i] = 40 + Math.random() * 120;
   tints[i] = Math.pow(Math.random(), 1.6); // mostly cool, occasional warm pop
 }
 
 const geometry = new THREE.BufferGeometry();
-geometry.setAttribute('aSeed', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('position', new THREE.BufferAttribute(seedPositions, 3));
 geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
 geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
 geometry.setAttribute('aTint', new THREE.BufferAttribute(tints, 1));
+// The position attribute holds polar seeds, not cartesian points, so
+// the auto-computed bounding sphere is meaningless — disable culling.
+geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
 
 const material = new THREE.ShaderMaterial({
   uniforms: {
@@ -89,7 +95,8 @@ const material = new THREE.ShaderMaterial({
     uFogDensity: { value: 0.035 },
   },
   vertexShader: `
-    attribute vec3 aSeed;    // x = radius, y = azimuth, z = elevation
+    // position is Three.js's built-in attribute — we repurpose it to
+    // carry (radius, azimuth, elevation) rather than cartesian coords.
     attribute float aSpeed;
     attribute float aSize;
     attribute float aTint;
@@ -102,12 +109,12 @@ const material = new THREE.ShaderMaterial({
     varying float vTwinkle;
 
     void main() {
-      float radius = aSeed.x;
-      float azimuth = aSeed.y + uTime * aSpeed;
-      float elevation = aSeed.z;
+      float radius = position.x;
+      float azimuth = position.y + uTime * aSpeed;
+      float elevation = position.z;
 
       // Tiny vertical breathing so particles don't sit on rigid rings.
-      float wobble = sin(uTime * 0.35 + aSeed.y * 4.0) * 0.25;
+      float wobble = sin(uTime * 0.35 + position.y * 4.0) * 0.25;
       float y = sin(elevation) * radius + wobble;
       float r = cos(elevation) * radius;
       float x = cos(azimuth) * r;
@@ -122,7 +129,7 @@ const material = new THREE.ShaderMaterial({
       vTint = aTint;
       vFogDepth = -mvPosition.z;
       // Per-particle twinkle keeps the cloud alive when the camera is still.
-      vTwinkle = 0.75 + 0.25 * sin(uTime * 1.3 + aSeed.y * 9.0 + aSeed.x);
+      vTwinkle = 0.75 + 0.25 * sin(uTime * 1.3 + position.y * 9.0 + position.x);
     }
   `,
   fragmentShader: `
