@@ -1,0 +1,18 @@
+{
+  "name": "threejs-sandbox",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "A personal three.js sandbox for experiments",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}

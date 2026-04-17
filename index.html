@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sandbox — Three.js Experiments</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/src/styles/main.css" />
+</head>
+<body>
+  <div class="grain"></div>
+
+  <header class="site-header">
+    <div class="brand">
+      <span class="brand-mark">◐</span>
+      <span class="brand-name">SANDBOX</span>
+    </div>
+    <div class="meta">
+      <span class="meta-item">v0.0.1</span>
+      <span class="meta-dot">·</span>
+      <span class="meta-item">three.js r169</span>
+      <span class="meta-dot">·</span>
+      <span class="meta-item" id="status-indicator">
+        <span class="status-dot"></span> local
+      </span>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="intro">
+      <p class="eyebrow">Personal workshop</p>
+      <h1 class="title">
+        A place to <em>break things</em><br />on purpose.
+      </h1>
+      <p class="lede">
+        Small, isolated three.js experiments. Each one lives in its own folder and
+        runs in the browser. Tinker, save, push — it deploys itself.
+      </p>
+    </section>
+
+    <section class="experiments">
+      <div class="section-header">
+        <h2>Experiments</h2>
+        <span class="counter" id="experiment-count">—</span>
+      </div>
+      <ul class="experiment-list" id="experiment-list">
+        <li class="experiment">
+          <a href="./experiments/01-floating-monolith/">
+            <span class="num">01</span>
+            <div class="body">
+              <h3>Floating Monolith</h3>
+              <p>A slow-turning obelisk under moody lighting. Starter scene — proves the whole stack works end to end.</p>
+            </div>
+            <span class="arrow">→</span>
+          </a>
+        </li>
+      </ul>
+    </section>
+
+    <section class="notes">
+      <div class="section-header">
+        <h2>How to add another</h2>
+      </div>
+      <ol class="steps">
+        <li>Duplicate any folder under <code>/experiments/</code> and rename it.</li>
+        <li>Edit its <code>main.js</code> to your heart's content.</li>
+        <li>Add an <code>&lt;li&gt;</code> block above pointing to the new folder.</li>
+        <li><code>git push</code>. It's live in about a minute.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Built for experimentation, not production.</span>
+    <span class="footer-meta">Peterborough · <span id="year"></span></span>
+  </footer>
+
+  <script type="module">
+    // Small bits of life
+    document.getElementById('year').textContent = new Date().getFullYear();
+    const count = document.querySelectorAll('#experiment-list .experiment').length;
+    document.getElementById('experiment-count').textContent = String(count).padStart(2, '0');
+  </script>
+</body>
+</html>
