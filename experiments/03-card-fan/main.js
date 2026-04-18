@@ -226,54 +226,76 @@ const handGroup = new THREE.Group();
 scene.add(handGroup);
 
 const CARD_COUNT = 5;
-const FAN_ANGLE = THREE.MathUtils.degToRad(38); // total spread
-const FAN_RADIUS = 2.6;                          // pivot below cards
-const cards = [];
+// Fan like a real hand: all cards share a pinch point at their
+// bottom edge and splay upward and outward.
+const FAN_ANGLE = THREE.MathUtils.degToRad(48); // total spread
+// Pinch point Y within handGroup — cards extend upward from here.
+const PINCH_Y = -0.5;
+// Tiny z step so stacked cards at the shared pinch don't z-fight.
+const Z_STACK = CARD.depth * 1.05;
+const cards = [];        // outer pivoted groups (anim target objects)
+const cardMeshes = [];   // inner meshes — what the raycaster sees
 
 const labels = ['I', 'II', 'III', 'IV', 'V'];
 for (let i = 0; i < CARD_COUNT; i++) {
-  const card = buildCard(labels[i]);
+  const mesh = buildCard(labels[i]);
+  // Bottom-edge pivot: shift the mesh up by half its height inside
+  // its outer group so the group's origin sits at the card's bottom
+  // edge. Fan rotations on the group now swing the card top outward
+  // around the bottom, as if held between the fingers.
+  mesh.position.y = CARD.height / 2;
+  mesh.userData.index = i; // raycast results map back to a card via this
+  cardMeshes.push(mesh);
+
+  const group = new THREE.Group();
+  group.add(mesh);
 
   // Per-card animated state. `home*` is the resting fan pose;
-  // `current*` is what we actually render (lerped toward target).
+  // `current*` (x/y/z/rot*) is what we actually render (lerped
+  // toward targets each frame).
   const t = (i - (CARD_COUNT - 1) / 2) / ((CARD_COUNT - 1) / 2); // -1..+1
-  const angle = -t * (FAN_ANGLE / 2);
-  const homeX = Math.sin(angle) * FAN_RADIUS;
-  const homeY = (Math.cos(angle) - 1) * FAN_RADIUS;
-  const homeRotZ = angle;
-  // Tiny z offset so cards stack predictably and don't z-fight at the pivot.
-  const homeZ = i * CARD.depth * 1.05;
+  const homeRotZ = -t * (FAN_ANGLE / 2);
+  const homeX = 0;
+  const homeY = PINCH_Y;
+  const homeZ = i * Z_STACK;
 
-  card.userData = {
+  group.userData = {
     index: i,
+    mesh,
     homeX, homeY, homeZ,
     homeRotZ,
-    // Off-screen entry point — comes in from below and the side it'll end on.
-    startX: homeX * 2.5 + (Math.random() - 0.5) * 0.4,
+    // Off-screen entry — from below and the side the card will land on.
+    startX: homeX + t * 2.5 + (Math.random() - 0.5) * 0.4,
     startY: homeY - 4.5,
     startZ: homeZ - 1.5,
     startRotZ: homeRotZ + (Math.random() - 0.5) * 1.2,
-    // Per-card animated values (these are what get lerped each frame).
-    x: 0, y: 0, z: 0, rotX: 0, rotY: 0, rotZ: 0,
-    // Targets — neighbouring-card hover spread is computed from these each frame.
+    // Per-card animated values (what get lerped each frame).
+    x: 0, y: 0, z: 0, rotX: 0, rotZ: 0,
+    // Spin is applied to the inner mesh (around the card's own
+    // vertical centreline), not the group (whose Y axis sits at the
+    // bottom edge). `spinTarget` accumulates by 4π on every hover
+    // enter and every hover exit, so rest is always a multiple of
+    // 2π and the card always spins forward.
+    spin: 0, spinTarget: 0, wantHoverPrev: 0,
+    // Targets — folded from home + hover lift + neighbour effects.
     targetX: homeX, targetY: homeY, targetZ: homeZ,
-    targetRotX: 0, targetRotY: 0, targetRotZ: homeRotZ,
+    targetRotX: 0, targetRotZ: homeRotZ,
     // Per-card stagger so they don't land in unison.
     introDelay: i * 0.12,
-    introProgress: 0, // 0 → 1
-    hoverStrength: 0, // 0 → 1, lerped toward 1 when hovered
+    introProgress: 0,
+    hoverStrength: 0,
   };
 
   // Start off-screen.
-  card.position.set(card.userData.startX, card.userData.startY, card.userData.startZ);
-  card.rotation.set(0, 0, card.userData.startRotZ);
-  card.userData.x = card.userData.startX;
-  card.userData.y = card.userData.startY;
-  card.userData.z = card.userData.startZ;
-  card.userData.rotZ = card.userData.startRotZ;
+  group.position.set(group.userData.startX, group.userData.startY, group.userData.startZ);
+  group.rotation.set(0, 0, group.userData.startRotZ);
+  group.userData.x = group.userData.startX;
+  group.userData.y = group.userData.startY;
+  group.userData.z = group.userData.startZ;
+  group.userData.rotZ = group.userData.startRotZ;
 
-  handGroup.add(card);
-  cards.push(card);
+  handGroup.add(group);
+  cards.push(group);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -293,7 +315,9 @@ window.addEventListener('pointerleave', () => {
 
 function updateHover() {
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(cards, false);
+  // Raycast against the inner meshes (the outer groups are empty-
+  // volume pivots). Each mesh carries its card index in userData.
+  const hits = raycaster.intersectObjects(cardMeshes, false);
   hoveredIndex = hits.length ? hits[0].object.userData.index : -1;
 }
 
@@ -340,23 +364,37 @@ function animate() {
     const wantHover = (i === hoveredIndex) ? 1 : 0;
     u.hoverStrength = damp(u.hoverStrength, wantHover, 10, dt);
 
-    // Neighbour spread: distance from hovered card → push outward along the fan.
-    let neighbourPush = 0;
+    // Spin: accumulate two full rotations (4π) on every enter and
+    // every exit transition — forward in both directions so it
+    // reads as a pro card flourish. spinTarget is always a
+    // multiple of 2π, so the card always settles face-forward.
+    if (wantHover !== u.wantHoverPrev) {
+      u.spinTarget += Math.PI * 4;
+      u.wantHoverPrev = wantHover;
+    }
+
+    // Neighbour spread — angular fan-out plus a small z pullback,
+    // both scaled by 1/dist from the hovered card. Immediate
+    // neighbours move the most; distant cards barely notice.
+    let neighbourAngle = 0;
+    let neighbourZ = 0;
     if (hoveredIndex >= 0 && i !== hoveredIndex) {
       const sign = Math.sign(i - hoveredIndex);
       const dist = Math.abs(i - hoveredIndex);
-      // Falls off with distance so only adjacent cards move much.
-      neighbourPush = sign * (0.18 / dist);
+      // ~12.6° extra splay for an adjacent neighbour — roughly
+      // double the old X-push and now correctly angular.
+      neighbourAngle = sign * (0.22 / dist);
+      // Depth pullback so even aggressive hover lifts can't clip.
+      neighbourZ = -0.35 / dist;
     }
 
-    // Target = home pose, displaced by hover and neighbour effects.
-    u.targetX   = u.homeX + neighbourPush;
+    u.targetX   = u.homeX;
     u.targetY   = u.homeY + u.hoverStrength * 0.25;
-    u.targetZ   = u.homeZ + u.hoverStrength * 0.6;
-    // Hovered card un-rotates (faces viewer) and tilts back slightly.
-    u.targetRotZ = u.homeRotZ * (1 - u.hoverStrength * 0.7);
+    u.targetZ   = u.homeZ + u.hoverStrength * 0.6 + neighbourZ;
+    // Hovered card un-rotates (faces viewer) and tilts back slightly;
+    // neighbours rotate extra outward along the fan.
+    u.targetRotZ = u.homeRotZ * (1 - u.hoverStrength * 0.7) + neighbourAngle;
     u.targetRotX = -u.hoverStrength * 0.25;
-    u.targetRotY = 0;
   }
 
   // ── Apply intro flight, then damped settle ──
@@ -384,11 +422,18 @@ function animate() {
     u.y = damp(u.y, ty, rate, dt);
     u.z = damp(u.z, tz, rate, dt);
     u.rotX = damp(u.rotX, u.targetRotX * p, rate, dt);
-    u.rotY = damp(u.rotY, u.targetRotY * p, rate, dt);
     u.rotZ = damp(u.rotZ, trZ, rate, dt);
+    // Spin eases toward its accumulator at the same rate as the
+    // lift, so the two rotations complete together with the
+    // forward motion and together again with the return.
+    u.spin = damp(u.spin, u.spinTarget, 9, dt);
 
+    // Group carries position + fan tilt; inner mesh carries the
+    // spin around the card's own vertical centreline (not the
+    // group's vertical, which passes through the bottom edge).
     c.position.set(u.x, u.y, u.z);
-    c.rotation.set(u.rotX, u.rotY, u.rotZ);
+    c.rotation.set(u.rotX, 0, u.rotZ);
+    u.mesh.rotation.y = u.spin;
   }
 
   // ── Idle hand sway: applies to whole group, after all cards are home ──
