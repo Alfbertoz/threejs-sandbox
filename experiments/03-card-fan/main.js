@@ -175,16 +175,94 @@ function drawFront(ctx, w, h, label) {
 // Card construction
 // ─────────────────────────────────────────────────────────────
 //
-// BoxGeometry face order: [+x, -x, +y, -y, +z, -z]
-// We want the front art on +z and the back art on -z; the other four
-// faces are plain charcoal so the edges read as card stock.
-//
-// MeshStandardMaterial is unlit-friendly under our key/rim setup and
-// catches the terracotta key nicely on the front face.
+// Rounded-rectangle shape extruded to the card's thickness.
+// ExtrudeGeometry gives us proper 3D-correct rounded corners that
+// read cleanly from every angle; a shader fake would fail at
+// oblique angles.
+
+// Rounded-rectangle Shape centred on origin in XY.
+function createRoundedCardShape(width, height, radius) {
+  const w = width / 2;
+  const h = height / 2;
+  const r = Math.min(radius, Math.min(w, h)); // guard oversize radii
+  const shape = new THREE.Shape();
+  shape.moveTo(-w + r, -h);
+  shape.lineTo(w - r, -h);
+  shape.quadraticCurveTo(w, -h, w, -h + r);
+  shape.lineTo(w, h - r);
+  shape.quadraticCurveTo(w, h, w - r, h);
+  shape.lineTo(-w + r, h);
+  shape.quadraticCurveTo(-w, h, -w, h - r);
+  shape.lineTo(-w, -h + r);
+  shape.quadraticCurveTo(-w, -h, -w + r, -h);
+  return shape;
+}
+
+// UV generator that normalises cap UVs to [0..1] over the shape's
+// bounding rect. ExtrudeGeometry's default generator writes raw
+// world-space x/y as UVs, which would sample the canvas texture at
+// sub-unit ranges and wrap. The side walls carry a plain charcoal
+// material so side UVs are ignored in practice.
+function createCardUVGenerator(width, height) {
+  const halfW = width / 2;
+  const halfH = height / 2;
+  const zero = new THREE.Vector2();
+  return {
+    generateTopUV(geometry, vertices, indexA, indexB, indexC) {
+      const uv = (idx) => new THREE.Vector2(
+        (vertices[idx * 3] + halfW) / width,
+        (vertices[idx * 3 + 1] + halfH) / height,
+      );
+      return [uv(indexA), uv(indexB), uv(indexC)];
+    },
+    generateSideWallUV() {
+      return [zero.clone(), zero.clone(), zero.clone(), zero.clone()];
+    },
+  };
+}
+
+// Shared shape + extrude settings (cheap to reuse across cards).
+const CARD_CORNER_RADIUS = CARD.width * 0.05;
+const CARD_SHAPE = createRoundedCardShape(CARD.width, CARD.height, CARD_CORNER_RADIUS);
+const EXTRUDE_SETTINGS = {
+  depth: CARD.depth,
+  bevelEnabled: false,
+  curveSegments: 10,
+  steps: 1,
+  UVGenerator: createCardUVGenerator(CARD.width, CARD.height),
+};
+
+// Build the base geometry once; each card gets a clone with its
+// own material group layout so it can pair distinct front/back
+// materials against the shared sides.
+const baseCardGeo = new THREE.ExtrudeGeometry(CARD_SHAPE, EXTRUDE_SETTINGS);
+// Re-centre on Z so the card behaves like the old BoxGeometry
+// (extent -depth/2 .. +depth/2). Extrude defaults to 0..depth.
+baseCardGeo.translate(0, 0, -CARD.depth / 2);
+// ExtrudeGeometry emits one group covering both caps (materialIndex
+// 0) followed by one for the sides (materialIndex 1). Split the
+// cap group so we can pair a unique front texture per card with
+// the shared back texture; front cap triangles come first, back
+// cap triangles second (per ExtrudeGeometry's build order).
+{
+  const origLid = baseCardGeo.groups[0];
+  const origSide = baseCardGeo.groups[1];
+  const halfLid = origLid.count / 2;
+  baseCardGeo.clearGroups();
+  baseCardGeo.addGroup(origLid.start, halfLid, 0);                  // front cap
+  baseCardGeo.addGroup(origLid.start + halfLid, halfLid, 1);        // back cap
+  baseCardGeo.addGroup(origSide.start, origSide.count, 2);          // sides
+}
+
 const sharedBackTex = makeCardTexture(drawBack);
 const edgeMaterial = new THREE.MeshStandardMaterial({
   color: PAL.charcoal,
   roughness: 0.7,
+  metalness: 0.0,
+});
+const sharedBackMat = new THREE.MeshStandardMaterial({
+  map: sharedBackTex,
+  roughness: 0.55,
   metalness: 0.0,
 });
 
@@ -195,22 +273,13 @@ function buildCard(label) {
     roughness: 0.55,
     metalness: 0.0,
   });
-  const backMat = new THREE.MeshStandardMaterial({
-    map: sharedBackTex,
-    roughness: 0.55,
-    metalness: 0.0,
-  });
-
-  const geo = new THREE.BoxGeometry(CARD.width, CARD.height, CARD.depth);
+  // Share the extruded geometry; only the material array is per-card.
   const materials = [
-    edgeMaterial, // +x  (right edge)
-    edgeMaterial, // -x  (left edge)
-    edgeMaterial, // +y  (top edge)
-    edgeMaterial, // -y  (bottom edge)
-    frontMat,     // +z  (front face — toward camera)
-    backMat,      // -z  (back face)
+    frontMat,        // front cap — unique texture per card
+    sharedBackMat,   // back cap — shared across all cards
+    edgeMaterial,    // side walls — plain charcoal
   ];
-  const mesh = new THREE.Mesh(geo, materials);
+  const mesh = new THREE.Mesh(baseCardGeo, materials);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
