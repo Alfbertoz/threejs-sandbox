@@ -364,12 +364,12 @@ function animate() {
     const wantHover = (i === hoveredIndex) ? 1 : 0;
     u.hoverStrength = damp(u.hoverStrength, wantHover, 10, dt);
 
-    // Spin: accumulate two full rotations (4π) on every enter and
+    // Spin: accumulate one full rotation (2π) on every enter and
     // every exit transition — forward in both directions so it
-    // reads as a pro card flourish. spinTarget is always a
-    // multiple of 2π, so the card always settles face-forward.
+    // reads as a card flourish. spinTarget is always a multiple of
+    // 2π, so the card always settles face-forward.
     if (wantHover !== u.wantHoverPrev) {
-      u.spinTarget += Math.PI * 4;
+      u.spinTarget += Math.PI * 2;
       u.wantHoverPrev = wantHover;
     }
 
@@ -423,10 +423,10 @@ function animate() {
     u.z = damp(u.z, tz, rate, dt);
     u.rotX = damp(u.rotX, u.targetRotX * p, rate, dt);
     u.rotZ = damp(u.rotZ, trZ, rate, dt);
-    // Spin eases toward its accumulator at the same rate as the
-    // lift, so the two rotations complete together with the
-    // forward motion and together again with the return.
-    u.spin = damp(u.spin, u.spinTarget, 9, dt);
+    // Spin eases slower than the lift so it reads as a deliberate
+    // flourish rather than a tornado — and the lift/spread land
+    // visibly before the spin finishes.
+    u.spin = damp(u.spin, u.spinTarget, 4, dt);
 
     // Group carries position + fan tilt; inner mesh carries the
     // spin around the card's own vertical centreline (not the
