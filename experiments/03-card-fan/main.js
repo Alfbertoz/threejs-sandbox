@@ -242,15 +242,18 @@ baseCardGeo.translate(0, 0, -CARD.depth / 2);
 // ExtrudeGeometry emits one group covering both caps (materialIndex
 // 0) followed by one for the sides (materialIndex 1). Split the
 // cap group so we can pair a unique front texture per card with
-// the shared back texture; front cap triangles come first, back
-// cap triangles second (per ExtrudeGeometry's build order).
+// the shared back texture. Empirically in r169's build order, the
+// first cap half is the back face (-z, facing away from the
+// camera) and the second half is the front face (+z, facing the
+// camera). Materials stay in [front, back, edge] order — we just
+// wire the groups to the matching indices.
 {
   const origLid = baseCardGeo.groups[0];
   const origSide = baseCardGeo.groups[1];
   const halfLid = origLid.count / 2;
   baseCardGeo.clearGroups();
-  baseCardGeo.addGroup(origLid.start, halfLid, 0);                  // front cap
-  baseCardGeo.addGroup(origLid.start + halfLid, halfLid, 1);        // back cap
+  baseCardGeo.addGroup(origLid.start, halfLid, 1);                  // back cap (-z)
+  baseCardGeo.addGroup(origLid.start + halfLid, halfLid, 0);        // front cap (+z)
   baseCardGeo.addGroup(origSide.start, origSide.count, 2);          // sides
 }
 
