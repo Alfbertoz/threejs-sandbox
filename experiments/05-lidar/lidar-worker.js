@@ -1,59 +1,28 @@
 // ─────────────────────────────────────────────────────────────
 // Web Worker — decodes a LAZ buffer off the main thread.
-// The laz-rs WASM decompressor runs for several seconds on 80 MB
-// files; doing it on the main thread triggers browser
+// The laz-perf WASM decompressor runs for several seconds on the
+// autzen file; doing it on the main thread triggers browser
 // "page unresponsive" dialogs. Vite bundles this file via the
 // `?worker` import suffix in main.js.
+//
+// Uses LASLoader (laz-perf backend) — supports LAS ≤ 1.3, which
+// is what the autzen.laz file is. The LAZRsLoader path can handle
+// LAS 1.4 but in 4.4.x panics in its close() on exit and masks
+// the real parse error; stick with laz-perf when we can.
 // ─────────────────────────────────────────────────────────────
 
-import { LAZRsLoader } from '@loaders.gl/las';
+import { LASLoader } from '@loaders.gl/las';
 
 self.onmessage = async (event) => {
   const { buffer } = event.data;
-
-  // Workaround for a laz-rs-wasm bug in @loaders.gl/las 4.4.x:
-  // after the point loop completes cleanly, parseLASChunked's
-  // `finally { dataHandler.close() }` panics in wasm-bindgen with
-  // "attempted to take ownership of rust value while it was
-  // borrowed", and that error replaces the successful parse.
-  //
-  // The POSITION Float32Array is allocated once up front and is
-  // populated across chunks; onProgress fires after each chunk
-  // (including the final one) with the live mesh, so by the time
-  // close() explodes we already hold a fully-populated array.
-  // Capture it and swallow only the known close-time bug.
-  let capturedPositions = null;
-
   try {
-    // `skip: 10` reads every 10th point. Autzen has ~18M points;
-    // 1.8M is still plenty dense visually and cuts both parse time
-    // and GPU memory by ~10×.
-    await LAZRsLoader.parse(buffer, {
-      las: { skip: 10 },
-      onProgress: (batch) => {
-        const positions = batch?.attributes?.POSITION?.value;
-        if (positions) capturedPositions = positions;
-      },
-    });
+    // `skip: 10` reads every 10th point. Autzen has ~10M points;
+    // 1M is plenty dense and keeps GPU memory light.
+    const data = await LASLoader.parse(buffer, { las: { skip: 10 } });
+    const positions = data.attributes.POSITION.value;
+    // Transfer the Float32Array's backing buffer so we don't copy.
+    self.postMessage({ positions }, [positions.buffer]);
   } catch (err) {
-    const msg = err?.message || String(err);
-    const isCloseBug =
-      msg.includes('Failed to close file') ||
-      msg.includes('while it was borrowed');
-    if (!(capturedPositions && isCloseBug)) {
-      self.postMessage({ error: msg });
-      return;
-    }
+    self.postMessage({ error: err?.message || String(err) });
   }
-
-  if (!capturedPositions) {
-    self.postMessage({ error: 'No positions captured from LAZ parse' });
-    return;
-  }
-
-  // Transfer the Float32Array's backing buffer so we don't copy.
-  self.postMessage(
-    { positions: capturedPositions },
-    [capturedPositions.buffer],
-  );
 };

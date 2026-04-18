@@ -12,7 +12,14 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // UI alive.
 import LidarWorker from './lidar-worker.js?worker';
 
-const LIDAR_URL = 'https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz';
+// autzen.laz is the plain LAS 1.2 version of the Autzen stadium scan
+// (~56 MB, ~10M points). The classified COPC variant at the same
+// bucket is LAS 1.4 and laz-rs-wasm's decoder throws on its first
+// read from that chunk layout — the close-finally then masks the
+// real error with "attempted to take ownership of rust value while
+// it was borrowed", so the failure is invisible. LAS 1.2 avoids all
+// of that.
+const LIDAR_URL = 'https://s3.amazonaws.com/hobu-lidar/autzen.laz';
 
 // ── Scene ─────────────────────────────────────────────
 const scene = new THREE.Scene();
