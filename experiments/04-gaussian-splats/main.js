@@ -61,6 +61,7 @@ const SPLATS = [
     // Heavy one — ~163MB compressed ply of a full church interior.
     // Button label warns the user so the long load isn't a surprise;
     // the existing spinner stays visible for the whole download.
+    // `walkable: true` unlocks first-person Walk mode on the toggle.
     name: 'Church (163MB)',
     url: 'https://d28zzqy0iyovbz.cloudfront.net/c67edb74/v1/scene.compressed.ply',
     position: new THREE.Vector3(0, 0, 0),
@@ -68,6 +69,7 @@ const SPLATS = [
     scale: 1.0,
     cameraRadius: 7,
     cameraHeight: 1.5,
+    walkable: true,
   },
 ];
 
@@ -118,9 +120,25 @@ const pickerEl = document.getElementById('splat-picker');
 
 let splat = null;
 let currentIndex = -1;
-let mode = 'orbit'; // 'orbit' | 'cinematic'
+let mode = 'orbit'; // 'orbit' | 'cinematic' | 'walk' (walk only on walkable splats)
 let cinematicStartAngle = 0;
 let cinematicElapsedOffset = 0;
+
+// ── Walk-mode state ───────────────────────────────────
+// Yaw/pitch are Euler angles (YXZ order) applied to the camera each
+// frame. Velocity is lerped toward a target derived from held keys so
+// movement feels smooth rather than snapping on/off.
+const walkKeys = new Set();
+let walkYaw = 0;
+let walkPitch = 0;
+let walkDragging = false;
+let walkLastMouseX = 0;
+let walkLastMouseY = 0;
+const walkVelocity = new THREE.Vector3();
+const walkTargetVelocity = new THREE.Vector3();
+const WALK_SPEED = 2.5;               // world units per second
+const WALK_LOOK_SENSITIVITY = 0.0028; // radians per pixel of drag
+const WALK_ACCEL = 9;                 // higher = snappier stops/starts
 
 // ─────────────────────────────────────────────────────────────
 // Splat loading
@@ -165,9 +183,22 @@ function setActiveSplat(index) {
   // The orbit target follows the splat's centre so controls feel natural.
   controls.target.copy(cfg.position);
 
+  // Resolve which mode the new splat should land in:
+  //   walkable splat      → walk (brief: default for the church)
+  //   non-walkable + walk → silently drop back to orbit
+  //   anything else       → keep current mode
+  if (cfg.walkable) {
+    mode = 'walk';
+    enterWalk(cfg);
+  } else if (mode === 'walk') {
+    mode = 'orbit';
+    enterOrbit();
+  }
+
   // Reset camera to the splat's preferred framing when in orbit mode.
   // Cinematic mode reads cameraRadius/cameraHeight from the current
   // config each frame and will glide the camera to the new values.
+  // (Walk mode positions the camera itself inside enterWalk.)
   if (mode === 'orbit') {
     camera.position.set(
       cfg.position.x,
@@ -176,6 +207,9 @@ function setActiveSplat(index) {
     );
     controls.update();
   }
+
+  // Toggle label depends on the new splat's walkable-ness.
+  refreshToggleLabel();
 
   showLoader();
   splat.initialized
@@ -207,6 +241,28 @@ SPLATS.forEach((cfg, i) => {
 // Camera modes
 // ─────────────────────────────────────────────────────────────
 
+// Keep toggle label + hint + active-class in one place so each
+// mode-entry function doesn't hand-write them independently.
+// Convention (unchanged): the button shows the mode you'd switch
+// TO if clicked.
+function refreshToggleLabel() {
+  const walkable = SPLATS[currentIndex]?.walkable === true;
+  if (mode === 'orbit') {
+    toggleEl.classList.remove('active');
+    toggleEl.textContent = 'Cinematic';
+    hintEl.textContent = 'Drag to orbit · Scroll to zoom';
+  } else if (mode === 'cinematic') {
+    toggleEl.classList.add('active');
+    // After cinematic we go to walk on walkable splats, orbit otherwise.
+    toggleEl.textContent = walkable ? 'Walk' : 'Orbit';
+    hintEl.textContent = 'Cinematic mode · camera locked';
+  } else if (mode === 'walk') {
+    toggleEl.classList.add('active');
+    toggleEl.textContent = 'Orbit';
+    hintEl.textContent = 'WASD to move · Drag to look · Space/Shift for height';
+  }
+}
+
 function enterCinematic(elapsed) {
   // Take the camera's current angle around the target so we don't jump.
   const dx = camera.position.x - controls.target.x;
@@ -214,9 +270,7 @@ function enterCinematic(elapsed) {
   cinematicStartAngle = Math.atan2(dz, dx);
   cinematicElapsedOffset = elapsed;
   controls.enabled = false;
-  toggleEl.classList.add('active');
-  toggleEl.textContent = 'Orbit';
-  hintEl.textContent = 'Cinematic mode · camera locked';
+  refreshToggleLabel();
 }
 
 function enterOrbit() {
@@ -224,19 +278,57 @@ function enterOrbit() {
   // OrbitControls re-derives spherical coords from camera vs. target
   // on update() — no explicit state sync needed.
   controls.update();
-  toggleEl.classList.remove('active');
-  toggleEl.textContent = 'Cinematic';
-  hintEl.textContent = 'Drag to orbit · Scroll to zoom';
+  refreshToggleLabel();
+}
+
+function enterWalk(cfg) {
+  controls.enabled = false;
+  // Land at the splat's default orbit pose so the user isn't
+  // teleported somewhere disorienting, but face the splat's centre.
+  camera.position.set(
+    cfg.position.x,
+    cfg.position.y + cfg.cameraHeight,
+    cfg.position.z + cfg.cameraRadius,
+  );
+  const look = new THREE.Vector3()
+    .subVectors(cfg.position, camera.position)
+    .normalize();
+  // Default camera forward is -Z; rotate around Y by yaw then X by
+  // pitch (YXZ) — these are the angles that put -Z along `look`.
+  walkYaw = Math.atan2(-look.x, -look.z);
+  walkPitch = Math.asin(THREE.MathUtils.clamp(look.y, -1, 1));
+  applyWalkRotation();
+  walkVelocity.set(0, 0, 0);
+  walkKeys.clear();
+  walkDragging = false;
+  refreshToggleLabel();
+}
+
+function applyWalkRotation() {
+  camera.rotation.order = 'YXZ';
+  camera.rotation.set(walkPitch, walkYaw, 0);
 }
 
 toggleEl.addEventListener('click', () => {
+  const walkable = SPLATS[currentIndex]?.walkable === true;
   if (mode === 'orbit') {
     mode = 'cinematic';
     enterCinematic(clock.getElapsedTime());
-  } else {
+  } else if (mode === 'cinematic') {
+    if (walkable) {
+      mode = 'walk';
+      enterWalk(SPLATS[currentIndex]);
+    } else {
+      mode = 'orbit';
+      enterOrbit();
+    }
+  } else if (mode === 'walk') {
     mode = 'orbit';
     enterOrbit();
   }
+  // Drop focus so a subsequent space/enter keypress in walk mode
+  // doesn't re-trigger this click handler.
+  toggleEl.blur();
 });
 
 // ── Smooth cinematic-mode camera ──────────────────────
@@ -262,6 +354,75 @@ function damp(current, target, rate, dt) {
   return current + (target - current) * (1 - Math.exp(-rate * dt));
 }
 
+// ── Walk-mode input ───────────────────────────────────
+// Listeners are always attached; they no-op unless mode === 'walk'.
+// Keyed off `e.code` so `shift` doesn't uppercase the WASD keys.
+function onWalkKeyDown(e) {
+  if (mode !== 'walk') return;
+  switch (e.code) {
+    case 'KeyW': case 'KeyA': case 'KeyS': case 'KeyD':
+    case 'Space': case 'ShiftLeft': case 'ShiftRight':
+      walkKeys.add(e.code);
+      e.preventDefault();
+      break;
+  }
+}
+function onWalkKeyUp(e) {
+  walkKeys.delete(e.code);
+}
+window.addEventListener('keydown', onWalkKeyDown);
+window.addEventListener('keyup', onWalkKeyUp);
+
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (mode !== 'walk' || e.button !== 0) return;
+  walkDragging = true;
+  walkLastMouseX = e.clientX;
+  walkLastMouseY = e.clientY;
+});
+window.addEventListener('mousemove', (e) => {
+  if (!walkDragging || mode !== 'walk') return;
+  const dx = e.clientX - walkLastMouseX;
+  const dy = e.clientY - walkLastMouseY;
+  walkLastMouseX = e.clientX;
+  walkLastMouseY = e.clientY;
+  walkYaw -= dx * WALK_LOOK_SENSITIVITY;
+  walkPitch -= dy * WALK_LOOK_SENSITIVITY;
+  // Prevent flipping at the poles.
+  const lim = Math.PI / 2 - 0.01;
+  walkPitch = Math.max(-lim, Math.min(lim, walkPitch));
+});
+window.addEventListener('mouseup', () => {
+  walkDragging = false;
+});
+
+// Compose a horizontal target velocity from held keys. Forward is
+// the camera's -Z projected onto the ground plane, so movement
+// follows where you're facing, not arbitrary world axes. Y is a
+// separate free-fly up/down axis for Space / Shift.
+function computeWalkTargetVelocity() {
+  const forwardX = -Math.sin(walkYaw);
+  const forwardZ = -Math.cos(walkYaw);
+  const rightX = Math.cos(walkYaw);
+  const rightZ = -Math.sin(walkYaw);
+
+  let tx = 0, ty = 0, tz = 0;
+  if (walkKeys.has('KeyW')) { tx += forwardX; tz += forwardZ; }
+  if (walkKeys.has('KeyS')) { tx -= forwardX; tz -= forwardZ; }
+  if (walkKeys.has('KeyD')) { tx += rightX;   tz += rightZ;   }
+  if (walkKeys.has('KeyA')) { tx -= rightX;   tz -= rightZ;   }
+  if (walkKeys.has('Space'))                                    ty += 1;
+  if (walkKeys.has('ShiftLeft') || walkKeys.has('ShiftRight'))  ty -= 1;
+
+  const len = Math.hypot(tx, ty, tz);
+  if (len > 0) {
+    tx = (tx / len) * WALK_SPEED;
+    ty = (ty / len) * WALK_SPEED;
+    tz = (tz / len) * WALK_SPEED;
+  }
+  walkTargetVelocity.set(tx, ty, tz);
+  return walkTargetVelocity;
+}
+
 // ── Resize ────────────────────────────────────────────
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -285,6 +446,13 @@ function animate() {
     camera.position.y = damp(camera.position.y, cinematicTarget.y, 2.5, dt);
     camera.position.z = damp(camera.position.z, cinematicTarget.z, 2.5, dt);
     camera.lookAt(controls.target);
+  } else if (mode === 'walk') {
+    const target = computeWalkTargetVelocity();
+    walkVelocity.x = damp(walkVelocity.x, target.x, WALK_ACCEL, dt);
+    walkVelocity.y = damp(walkVelocity.y, target.y, WALK_ACCEL, dt);
+    walkVelocity.z = damp(walkVelocity.z, target.z, WALK_ACCEL, dt);
+    camera.position.addScaledVector(walkVelocity, dt);
+    applyWalkRotation();
   } else {
     controls.update();
   }
