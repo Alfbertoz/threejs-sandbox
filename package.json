@@ -10,6 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@loaders.gl/core": "^4.4.1",
+    "@loaders.gl/las": "^4.4.1",
+    "@math.gl/types": "^4.1.0",
     "@sparkjsdev/spark": "^0.1.10",
     "three": "^0.169.0"
   },
