@@ -16,9 +16,10 @@ import { LASLoader } from '@loaders.gl/las';
 self.onmessage = async (event) => {
   const { buffer } = event.data;
   try {
-    // `skip: 10` reads every 10th point. Autzen has ~10M points;
-    // 1M is plenty dense and keeps GPU memory light.
-    const data = await LASLoader.parse(buffer, { las: { skip: 10 } });
+    // `skip: 2` reads every 2nd point. Autzen has ~10M points;
+    // ~5M is visually dense without straining GPU memory (~60 MB
+    // for positions).
+    const data = await LASLoader.parse(buffer, { las: { skip: 2 } });
     const positions = data.attributes.POSITION.value;
     // Transfer the Float32Array's backing buffer so we don't copy.
     self.postMessage({ positions }, [positions.buffer]);
