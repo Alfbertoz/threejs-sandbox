@@ -269,21 +269,17 @@ for (let i = 0; i < CARD_COUNT; i++) {
     startY: homeY - 4.5,
     startZ: homeZ - 1.5,
     startRotZ: homeRotZ + (Math.random() - 0.5) * 1.2,
-    // Per-card animated values (what get lerped each frame).
-    x: 0, y: 0, z: 0, rotX: 0, rotZ: 0,
-    // Spin is applied to the inner mesh (around the card's own
-    // vertical centreline), not the group (whose Y axis sits at the
-    // bottom edge). `spinTarget` accumulates by 4π on every hover
-    // enter and every hover exit, so rest is always a multiple of
-    // 2π and the card always spins forward.
-    spin: 0, spinTarget: 0, wantHoverPrev: 0,
-    // Targets — folded from home + hover lift + neighbour effects.
-    targetX: homeX, targetY: homeY, targetZ: homeZ,
-    targetRotX: 0, targetRotZ: homeRotZ,
-    // Per-card stagger so they don't land in unison.
+    // Per-card rendered values.
+    x: 0, y: 0, z: 0, rotZ: 0,
+    // Per-card stagger for the intro flight so they don't land in unison.
     introDelay: i * 0.12,
     introProgress: 0,
-    hoverStrength: 0,
+    // Click-driven extract animation. 0 = in the fan, 1 = forward-
+    // and-down "out" pose, with a waypoint (up, above the fan)
+    // traversed at 0.5. Animates linearly in time; easing is applied
+    // per-phase at sample time for a smooth up-then-forward arc.
+    animProgress: 0,
+    animTarget: 0,
   };
 
   // Start off-screen.
@@ -299,27 +295,48 @@ for (let i = 0; i < CARD_COUNT; i++) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Hover interaction
+// Click interaction — extract / return one card at a time
 // ─────────────────────────────────────────────────────────────
+//
+// States:
+//   extractedIndex  = -1  (nothing out)  or the index of the card
+//                     currently flying out / settled forward.
+//   pendingExtract  = -1  or the index of a card queued to extract
+//                     AFTER the current out-card has finished
+//                     returning to the fan.
+//
+// Click logic:
+//   - click the out card         → return it
+//   - click any card, nothing out → extract that card
+//   - click a different card
+//     while another is out      → queue; current card returns first,
+//                                  then the clicked one extracts
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let hoveredIndex = -1;
+let extractedIndex = -1;
+let pendingExtract = -1;
 
-window.addEventListener('pointermove', (e) => {
+renderer.domElement.addEventListener('click', (e) => {
+  // Ignore clicks while the intro is still flying cards in.
+  if (cards[cards.length - 1].userData.introProgress < 1) return;
+
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
-});
-window.addEventListener('pointerleave', () => {
-  pointer.set(-10, -10); // park off-screen so nothing intersects
-});
-
-function updateHover() {
   raycaster.setFromCamera(pointer, camera);
-  // Raycast against the inner meshes (the outer groups are empty-
-  // volume pivots). Each mesh carries its card index in userData.
   const hits = raycaster.intersectObjects(cardMeshes, false);
-  hoveredIndex = hits.length ? hits[0].object.userData.index : -1;
-}
+  if (!hits.length) return;
+  const i = hits[0].object.userData.index;
+
+  if (i === extractedIndex) {
+    extractedIndex = -1;
+    pendingExtract = -1;
+  } else if (extractedIndex === -1) {
+    extractedIndex = i;
+  } else {
+    pendingExtract = i;
+    extractedIndex = -1;
+  }
+});
 
 // ─────────────────────────────────────────────────────────────
 // Easing helpers
@@ -337,6 +354,40 @@ function easeOutCubic(x) {
   return 1 - c * c * c;
 }
 
+// Symmetric ease for the extract path — slow start, slow end
+// within each phase of the up-then-forward arc.
+function easeInOutCubic(x) {
+  return x < 0.5
+    ? 4 * x * x * x
+    : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+// Constants for the extract animation. The out pose sits forward
+// of the fan at the same resting Y; the waypoint is above the fan
+// so the card arcs up first, then forward and down.
+const EXTRACT_UP = 1.2;        // Y rise to waypoint
+const EXTRACT_FORWARD = 1.5;   // Z push from waypoint to out pose
+const EXTRACT_DURATION = 1.1;  // seconds per full direction
+
+// Position/rotation along the extract path for 0 (home) .. 1 (out).
+// Each phase (0→0.5 and 0.5→1) is eased independently so the arc
+// reads as up-then-forward rather than a straight diagonal.
+function extractPose(u, p, out) {
+  if (p <= 0.5) {
+    const t = easeInOutCubic(p * 2);
+    out.x = u.homeX;
+    out.y = u.homeY + t * EXTRACT_UP;
+    out.z = u.homeZ;
+    out.rotZ = u.homeRotZ * (1 - t);
+  } else {
+    const t = easeInOutCubic((p - 0.5) * 2);
+    out.x = u.homeX;
+    out.y = u.homeY + (1 - t) * EXTRACT_UP;
+    out.z = u.homeZ + t * EXTRACT_FORWARD;
+    out.rotZ = 0;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Resize & animate
 // ─────────────────────────────────────────────────────────────
@@ -348,92 +399,71 @@ window.addEventListener('resize', () => {
 
 const clock = new THREE.Clock();
 
+const pose = { x: 0, y: 0, z: 0, rotZ: 0 };
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05); // cap to avoid post-tab-switch jumps
   const elapsed = clock.getElapsedTime();
 
-  updateHover();
-
-  // ── Per-card targets: home pose + hover lift + neighbour spread ──
-  for (let i = 0; i < cards.length; i++) {
-    const c = cards[i];
-    const u = c.userData;
-
-    // Hover strength eases in/out smoothly per-card.
-    const wantHover = (i === hoveredIndex) ? 1 : 0;
-    u.hoverStrength = damp(u.hoverStrength, wantHover, 10, dt);
-
-    // Spin: accumulate one full rotation (2π) on every enter and
-    // every exit transition — forward in both directions so it
-    // reads as a card flourish. spinTarget is always a multiple of
-    // 2π, so the card always settles face-forward.
-    if (wantHover !== u.wantHoverPrev) {
-      u.spinTarget += Math.PI * 2;
-      u.wantHoverPrev = wantHover;
+  // ── Promote a queued extract once the previous out-card returns ──
+  // We only ever need to wait for the SINGLE card that was out; its
+  // animProgress hits ~0 when it's fully back in the fan.
+  if (extractedIndex === -1 && pendingExtract !== -1) {
+    const stillOut = cards.some((c) => c.userData.animProgress > 0.02);
+    if (!stillOut) {
+      extractedIndex = pendingExtract;
+      pendingExtract = -1;
     }
-
-    // Neighbour spread — angular fan-out plus a small z pullback,
-    // both scaled by 1/dist from the hovered card. Immediate
-    // neighbours move the most; distant cards barely notice.
-    let neighbourAngle = 0;
-    let neighbourZ = 0;
-    if (hoveredIndex >= 0 && i !== hoveredIndex) {
-      const sign = Math.sign(i - hoveredIndex);
-      const dist = Math.abs(i - hoveredIndex);
-      // ~12.6° extra splay for an adjacent neighbour — roughly
-      // double the old X-push and now correctly angular.
-      neighbourAngle = sign * (0.22 / dist);
-      // Depth pullback so even aggressive hover lifts can't clip.
-      neighbourZ = -0.35 / dist;
-    }
-
-    u.targetX   = u.homeX;
-    u.targetY   = u.homeY + u.hoverStrength * 0.25;
-    u.targetZ   = u.homeZ + u.hoverStrength * 0.6 + neighbourZ;
-    // Hovered card un-rotates (faces viewer) and tilts back slightly;
-    // neighbours rotate extra outward along the fan.
-    u.targetRotZ = u.homeRotZ * (1 - u.hoverStrength * 0.7) + neighbourAngle;
-    u.targetRotX = -u.hoverStrength * 0.25;
   }
 
-  // ── Apply intro flight, then damped settle ──
+  const animRate = 1 / EXTRACT_DURATION;
+
   for (const c of cards) {
     const u = c.userData;
 
-    // Intro: drive a 0→1 progress with stagger and ease.
+    // Intro flight (unchanged): 0→1 with stagger + ease-out cubic.
     if (u.introProgress < 1) {
       const local = Math.max(0, elapsed - u.introDelay);
-      const raw = Math.min(1, local / 1.1); // 1.1s flight per card
+      const raw = Math.min(1, local / 1.1);
       u.introProgress = easeOutCubic(raw);
     }
+
+    // Linear ramp of animProgress toward its target. The 3-point
+    // path is where the visual easing lives, applied per-phase.
+    u.animTarget = (u.index === extractedIndex) ? 1 : 0;
+    if (u.animProgress < u.animTarget) {
+      u.animProgress = Math.min(u.animTarget, u.animProgress + animRate * dt);
+    } else if (u.animProgress > u.animTarget) {
+      u.animProgress = Math.max(u.animTarget, u.animProgress - animRate * dt);
+    }
+
+    // Pose along the extract path at the current animProgress.
+    extractPose(u, u.animProgress, pose);
+
+    // During the intro, blend pose with the off-screen start so
+    // cards glide in toward the resting fan. Once landed, pose is
+    // the authoritative source — no damping needed (the path is
+    // already smooth and time-based, so responsiveness matters more).
     const p = u.introProgress;
+    if (p < 1) {
+      const tx = THREE.MathUtils.lerp(u.startX, pose.x, p);
+      const ty = THREE.MathUtils.lerp(u.startY, pose.y, p);
+      const tz = THREE.MathUtils.lerp(u.startZ, pose.z, p);
+      const trZ = THREE.MathUtils.lerp(u.startRotZ, pose.rotZ, p);
+      u.x = damp(u.x, tx, 14, dt);
+      u.y = damp(u.y, ty, 14, dt);
+      u.z = damp(u.z, tz, 14, dt);
+      u.rotZ = damp(u.rotZ, trZ, 14, dt);
+    } else {
+      u.x = pose.x;
+      u.y = pose.y;
+      u.z = pose.z;
+      u.rotZ = pose.rotZ;
+    }
 
-    // Blended target: while flying in, target is the home pose; after
-    // arrival, hover/neighbour adjustments take over via the same target.
-    const tx = THREE.MathUtils.lerp(u.startX, u.targetX, p);
-    const ty = THREE.MathUtils.lerp(u.startY, u.targetY, p);
-    const tz = THREE.MathUtils.lerp(u.startZ, u.targetZ, p);
-    const trZ = THREE.MathUtils.lerp(u.startRotZ, u.targetRotZ, p);
-
-    // Damped follow — feels physical, no linear interpolation.
-    const rate = p < 1 ? 14 : 9;
-    u.x = damp(u.x, tx, rate, dt);
-    u.y = damp(u.y, ty, rate, dt);
-    u.z = damp(u.z, tz, rate, dt);
-    u.rotX = damp(u.rotX, u.targetRotX * p, rate, dt);
-    u.rotZ = damp(u.rotZ, trZ, rate, dt);
-    // Spin eases slower than the lift so it reads as a deliberate
-    // flourish rather than a tornado — and the lift/spread land
-    // visibly before the spin finishes.
-    u.spin = damp(u.spin, u.spinTarget, 4, dt);
-
-    // Group carries position + fan tilt; inner mesh carries the
-    // spin around the card's own vertical centreline (not the
-    // group's vertical, which passes through the bottom edge).
     c.position.set(u.x, u.y, u.z);
-    c.rotation.set(u.rotX, 0, u.rotZ);
-    u.mesh.rotation.y = u.spin;
+    c.rotation.set(0, 0, u.rotZ);
   }
 
   // ── Idle hand sway: applies to whole group, after all cards are home ──
