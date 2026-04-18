@@ -60,49 +60,22 @@ async function loadLidar() {
   const buffer = await res.arrayBuffer();
 
   const worker = new LidarWorker();
-  const result = await new Promise((resolve, reject) => {
+  const positions = await new Promise((resolve, reject) => {
     worker.onmessage = (e) => {
       if (e.data.error) reject(new Error(e.data.error));
-      else resolve(e.data);
+      else resolve(e.data.positions);
     };
     worker.onerror = (e) => reject(new Error(e.message || 'worker error'));
     // Transfer the ArrayBuffer (no copy).
     worker.postMessage({ buffer }, [buffer]);
   });
   worker.terminate();
-  return result;
+  return positions;
 }
 
-// ── Classification palette ────────────────────────────
-// LAS ASPRS codes → RGB. Only the codes below get a distinct
-// colour; anything else falls through to "other" mid-grey. Values
-// are pre-converted from sRGB hex to linear RGB so per-vertex
-// colours survive the renderer's tone-mapping + sRGB encode
-// unchanged visually.
-const CLASS_COLOR = (() => {
-  const tmp = new THREE.Color();
-  const table = new Float32Array(256 * 3);
-  const set = (cls, hex) => {
-    tmp.setHex(hex).convertSRGBToLinear();
-    table[cls * 3]     = tmp.r;
-    table[cls * 3 + 1] = tmp.g;
-    table[cls * 3 + 2] = tmp.b;
-  };
-  // Default every code to "other" mid-grey first.
-  for (let i = 0; i < 256; i++) set(i, 0x6a6a6a);
-  set(2, 0x3a3a3a);          // ground
-  set(3, 0x4a6b3a);          // low vegetation
-  set(4, 0x4a6b3a);          // medium vegetation
-  set(5, 0x4a6b3a);          // high vegetation
-  set(6, 0xc46d47);          // building
-  set(9, 0x4a6fa5);          // water
-  return table;
-})();
-
-function buildPointCloud(positions, classifications) {
+function buildPointCloud(positions) {
   // positions is a Float32Array laid out as x,y,z,x,y,z,...
-  // classifications is a Uint8Array, one ASPRS code per point.
-  // (Both pulled from loaders.gl attributes in the worker.)
+  // (pulled from loaders.gl's POSITION attribute in the worker).
 
   // ── Centre the cloud ──
   // LAZ files use absolute world coordinates (hundreds of thousands
@@ -141,30 +114,10 @@ function buildPointCloud(positions, classifications) {
     Math.sqrt(size.x * size.x + size.y * size.y + size.z * size.z) / 2,
   );
 
-  // Per-point colour from classification lookup.
-  const pointCount = positions.length / 3;
-  const colors = new Float32Array(pointCount * 3);
-  if (classifications && classifications.length === pointCount) {
-    for (let i = 0; i < pointCount; i++) {
-      const c = classifications[i];
-      colors[i * 3]     = CLASS_COLOR[c * 3];
-      colors[i * 3 + 1] = CLASS_COLOR[c * 3 + 1];
-      colors[i * 3 + 2] = CLASS_COLOR[c * 3 + 2];
-    }
-  } else {
-    // Fallback: fill with "other" grey so nothing renders invisibly.
-    for (let i = 0; i < pointCount; i++) {
-      colors[i * 3]     = CLASS_COLOR[0];
-      colors[i * 3 + 1] = CLASS_COLOR[1];
-      colors[i * 3 + 2] = CLASS_COLOR[2];
-    }
-  }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
   const material = new THREE.PointsMaterial({
+    color: 0xc46d47,
     size: 1.5,
     sizeAttenuation: true,
-    vertexColors: true,
   });
 
   const points = new THREE.Points(geometry, material);
@@ -193,8 +146,8 @@ function buildPointCloud(positions, classifications) {
 }
 
 loadLidar()
-  .then(({ positions, classifications }) => {
-    buildPointCloud(positions, classifications);
+  .then((positions) => {
+    buildPointCloud(positions);
     loaderEl.classList.add('gone');
     setTimeout(() => loaderEl.remove(), 500);
   })

@@ -21,13 +21,8 @@ self.onmessage = async (event) => {
     // for positions).
     const data = await LASLoader.parse(buffer, { las: { skip: 2 } });
     const positions = data.attributes.POSITION.value;
-    // LAS classification (ASPRS codes) — one Uint8 per point. Used
-    // by the main thread to colour points by ground / vegetation /
-    // building / water / other.
-    const classifications = data.attributes.classification?.value ?? null;
-    const transfer = [positions.buffer];
-    if (classifications) transfer.push(classifications.buffer);
-    self.postMessage({ positions, classifications }, transfer);
+    // Transfer the Float32Array's backing buffer so we don't copy.
+    self.postMessage({ positions }, [positions.buffer]);
   } catch (err) {
     self.postMessage({ error: err?.message || String(err) });
   }
