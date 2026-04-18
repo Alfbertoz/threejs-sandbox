@@ -6,7 +6,11 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { LAZRsLoader } from '@loaders.gl/las';
+// Vite's `?worker` suffix bundles the worker and gives us a
+// constructor. Decoding 80 MB of LAZ on the main thread blocks
+// long enough to trigger "page unresponsive"; a worker keeps the
+// UI alive.
+import LidarWorker from './lidar-worker.js?worker';
 
 const LIDAR_URL = 'https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz';
 
@@ -43,24 +47,28 @@ controls.target.set(0, 0, 0);
 const loaderEl = document.getElementById('loader');
 
 async function loadLidar() {
-  // Explicit fetch → arrayBuffer → parse, per the brief.
+  // Explicit fetch → arrayBuffer → hand to worker for parse.
   const res = await fetch(LIDAR_URL);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buffer = await res.arrayBuffer();
-  // Call the loader's parse() directly instead of going through
-  // `@loaders.gl/core`'s `parse()`. The core wrapper sees
-  // `worker: true` on the loader and dispatches to a CDN-hosted
-  // worker bundle whose LAS backend is laz-perf — which caps at
-  // LAS 1.3 and rejects this COPC file. Going direct keeps us on
-  // the laz-rs main-thread path, which accepts LAS 1.4.
-  const data = await LAZRsLoader.parse(buffer);
-  return data;
+
+  const worker = new LidarWorker();
+  const positions = await new Promise((resolve, reject) => {
+    worker.onmessage = (e) => {
+      if (e.data.error) reject(new Error(e.data.error));
+      else resolve(e.data.positions);
+    };
+    worker.onerror = (e) => reject(new Error(e.message || 'worker error'));
+    // Transfer the ArrayBuffer (no copy).
+    worker.postMessage({ buffer }, [buffer]);
+  });
+  worker.terminate();
+  return positions;
 }
 
-function buildPointCloud(lasMesh) {
-  // loaders.gl returns a Mesh-shaped object; POSITION.value is a
-  // Float32Array laid out as x,y,z,x,y,z,...
-  const positions = lasMesh.attributes.POSITION.value;
+function buildPointCloud(positions) {
+  // positions is a Float32Array laid out as x,y,z,x,y,z,...
+  // (pulled from loaders.gl's POSITION attribute in the worker).
 
   // ── Centre the cloud ──
   // LAZ files use absolute world coordinates (hundreds of thousands
@@ -126,8 +134,8 @@ function buildPointCloud(lasMesh) {
 }
 
 loadLidar()
-  .then((data) => {
-    buildPointCloud(data);
+  .then((positions) => {
+    buildPointCloud(positions);
     loaderEl.classList.add('gone');
     setTimeout(() => loaderEl.remove(), 500);
   })
