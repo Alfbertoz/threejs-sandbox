@@ -7,7 +7,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { parse } from '@loaders.gl/core';
-import { LASLoader } from '@loaders.gl/las';
+// The autzen COPC file is LAS 1.4. loaders.gl's default `LASLoader`
+// aliases to `LAZPerfLoader` which is explicitly documented as not
+// supporting LAS 1.4 and hangs on this file. `LAZRsLoader` (Rust
+// laz-rs backend) handles 1.4 fine.
+import { LAZRsLoader } from '@loaders.gl/las';
 
 const LIDAR_URL = 'https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz';
 
@@ -48,7 +52,7 @@ async function loadLidar() {
   const res = await fetch(LIDAR_URL);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buffer = await res.arrayBuffer();
-  const data = await parse(buffer, LASLoader);
+  const data = await parse(buffer, LAZRsLoader);
   return data;
 }
 
@@ -128,7 +132,9 @@ loadLidar()
   })
   .catch((err) => {
     console.error('LiDAR load failed:', err);
-    loaderEl.textContent = 'Failed to load scan';
+    // Short, distinct message so a silent failure doesn't just look
+    // like the loader hanging at "Loading LiDAR scan…".
+    loaderEl.textContent = `Load failed · ${err.message || err}`;
   });
 
 // ── Resize ────────────────────────────────────────────
