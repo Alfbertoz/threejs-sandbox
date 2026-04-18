@@ -6,11 +6,6 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { parse } from '@loaders.gl/core';
-// The autzen COPC file is LAS 1.4. loaders.gl's default `LASLoader`
-// aliases to `LAZPerfLoader` which is explicitly documented as not
-// supporting LAS 1.4 and hangs on this file. `LAZRsLoader` (Rust
-// laz-rs backend) handles 1.4 fine.
 import { LAZRsLoader } from '@loaders.gl/las';
 
 const LIDAR_URL = 'https://s3.amazonaws.com/hobu-lidar/autzen-classified.copc.laz';
@@ -52,7 +47,13 @@ async function loadLidar() {
   const res = await fetch(LIDAR_URL);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buffer = await res.arrayBuffer();
-  const data = await parse(buffer, LAZRsLoader);
+  // Call the loader's parse() directly instead of going through
+  // `@loaders.gl/core`'s `parse()`. The core wrapper sees
+  // `worker: true` on the loader and dispatches to a CDN-hosted
+  // worker bundle whose LAS backend is laz-perf — which caps at
+  // LAS 1.3 and rejects this COPC file. Going direct keeps us on
+  // the laz-rs main-thread path, which accepts LAS 1.4.
+  const data = await LAZRsLoader.parse(buffer);
   return data;
 }
 
