@@ -121,6 +121,11 @@ function buildPointCloud(positions) {
   });
 
   const points = new THREE.Points(geometry, material);
+  // LAS/LAZ convention is Z-up (altitude). Three.js is Y-up, so
+  // loading positions verbatim leaves the scan standing vertical.
+  // Rotate -90° around X to map LAS-Z → Three-Y, i.e. lay the
+  // ground plane flat for a natural aerial-style viewing angle.
+  points.rotation.x = -Math.PI / 2;
   scene.add(points);
 
   // ── Frame the camera ──
