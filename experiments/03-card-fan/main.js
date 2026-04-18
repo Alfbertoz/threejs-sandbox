@@ -61,11 +61,15 @@ controls.maxDistance = 9;
 controls.maxPolarAngle = Math.PI / 1.9;
 controls.target.set(0, 0.2, 0);
 
-// ── Lighting (mirrors experiment 01) ──────────────────
-const ambient = new THREE.AmbientLight(0xffffff, 0.08);
+// ── Lighting (product-photography two-light setup) ────
+// The card fronts are the feature, so this scene diverges from
+// experiment 01's moody terracotta: high ambient floor, white key
+// plus a soft white fill on the opposite side, and the familiar
+// cool rim for separation against the dark ground.
+const ambient = new THREE.AmbientLight(0xffffff, 0.55);
 scene.add(ambient);
 
-const keyLight = new THREE.DirectionalLight(0xc46d47, 1.6);
+const keyLight = new THREE.DirectionalLight(0xf8f5ef, 1.2);
 keyLight.position.set(3, 5, 4);
 keyLight.castShadow = true;
 keyLight.shadow.mapSize.set(2048, 2048);
@@ -77,6 +81,13 @@ keyLight.shadow.camera.top = 4;
 keyLight.shadow.camera.bottom = -4;
 keyLight.shadow.bias = -0.0005;
 scene.add(keyLight);
+
+// Soft fill opposite the key — lifts the shadow side of each card
+// so fronts read evenly no matter where the hand tilts. No shadows
+// from this one; it's there to fill, not re-carve.
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+fillLight.position.set(-3, 4, 3);
+scene.add(fillLight);
 
 const rimLight = new THREE.DirectionalLight(0x4a6fa5, 0.55);
 rimLight.position.set(-3, 2, -3);

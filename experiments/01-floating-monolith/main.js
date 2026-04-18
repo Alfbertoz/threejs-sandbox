@@ -118,7 +118,7 @@ ground.receiveShadow = true;
 scene.add(ground);
 
 // ── Lighting ──────────────────────────────────────────
-const ambient = new THREE.AmbientLight(0xffffff, 0.08);
+const ambient = new THREE.AmbientLight(0xffffff, 0.25);
 scene.add(ambient);
 
 const keyLight = new THREE.DirectionalLight(0xc46d47, 1.6);
@@ -134,7 +134,7 @@ keyLight.shadow.camera.bottom = -6;
 keyLight.shadow.bias = -0.0005;
 scene.add(keyLight);
 
-const rimLight = new THREE.DirectionalLight(0x4a6fa5, 0.6);
+const rimLight = new THREE.DirectionalLight(0x4a6fa5, 0.8);
 rimLight.position.set(-3, 2, -4);
 scene.add(rimLight);
 
